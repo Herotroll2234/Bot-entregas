@@ -54,6 +54,13 @@ if (fs.existsSync(eventsPath)) {
 
 // Inicializa a conexão com o Discord
 const token = process.env.DISCORD_TOKEN;
+
+console.log('[DEBUG] Variáveis de ambiente detectadas no processo:');
+console.log(`- DISCORD_TOKEN: ${token ? `Definido (tamanho: ${token.length})` : 'Indefinido'}`);
+console.log(`- CLIENT_ID: ${process.env.CLIENT_ID ? `Definido (tamanho: ${process.env.CLIENT_ID.length})` : 'Indefinido'}`);
+console.log(`- GUILD_ID: ${process.env.GUILD_ID ? `Definido (tamanho: ${process.env.GUILD_ID.length})` : 'Indefinido'}`);
+console.log(`- LOG_CHANNEL_ID: ${process.env.LOG_CHANNEL_ID ? `Definido (tamanho: ${process.env.LOG_CHANNEL_ID.length})` : 'Indefinido'}`);
+
 if (!token || token === 'seu_token_aqui') {
   console.log('\n========================================================================');
   console.log('⚠️  [BOT] O token do bot não foi configurado no arquivo .env.');
