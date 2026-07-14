@@ -1,40 +1,47 @@
-import { 
-  Events, 
-  Interaction, 
-  ModalBuilder, 
-  TextInputBuilder, 
-  TextInputStyle, 
-  ActionRowBuilder, 
-  GuildMember, 
+import {
+  Events,
+  Interaction,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
+  GuildMember,
   ChannelType,
-  EmbedBuilder
+  EmbedBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  PermissionsBitField,
+  TextChannel,
 } from 'discord.js';
-import { db } from '../utils/db';
+import { pending } from '../utils/db';
+import { MATERIALS, getMaterialByValue } from '../utils/materials';
 
 export const name = Events.InteractionCreate;
 export const once = false;
 
 export async function execute(interaction: Interaction) {
-  // 1. Slash Commands
+
+  // ─── 1. Slash Commands ──────────────────────────────────────────────────────
   if (interaction.isChatInputCommand()) {
     const command = (interaction.client as any).commands.get(interaction.commandName);
     if (!command) return;
-
     try {
       await command.execute(interaction);
     } catch (error) {
       console.error('Erro ao executar comando:', error);
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: 'Ocorreu um erro ao executar esse comando!', ephemeral: true });
-      } else {
-        await interaction.reply({ content: 'Ocorreu um erro ao executar esse comando!', ephemeral: true });
-      }
+      const reply = { content: '❌ Ocorreu um erro ao executar esse comando!', ephemeral: true };
+      if (interaction.replied || interaction.deferred) await interaction.followUp(reply);
+      else await interaction.reply(reply);
     }
     return;
   }
 
-  // 2. Button Clicks
+  // ─── 2. Botões ───────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
+
+    // Botão: Solicitar Emprego
     if (interaction.customId === 'btn_solicitar_emprego') {
       const modal = new ModalBuilder()
         .setCustomId('modal_solicitar_emprego')
@@ -45,7 +52,7 @@ export async function execute(interaction: Interaction) {
         .setLabel('Seu Nome')
         .setStyle(TextInputStyle.Short)
         .setPlaceholder('Ex: João Silva')
-        .setMaxLength(25) // Garantir que não estoure os 32 caracteres com o pombo
+        .setMaxLength(25)
         .setRequired(true);
 
       const pomboInput = new TextInputBuilder()
@@ -56,147 +63,226 @@ export async function execute(interaction: Interaction) {
         .setMaxLength(5)
         .setRequired(true);
 
-      const row1 = new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput);
-      const row2 = new ActionRowBuilder<TextInputBuilder>().addComponents(pomboInput);
-      modal.addComponents(row1, row2);
-
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(nameInput),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(pomboInput),
+      );
       await interaction.showModal(modal);
-    } 
-    
-    else if (interaction.customId === 'btn_registrar_entrega') {
-      const modal = new ModalBuilder()
-        .setCustomId('modal_registrar_entrega')
-        .setTitle('Cadastro de Entrega');
-
-      const qtdInput = new TextInputBuilder()
-        .setCustomId('qtd_input')
-        .setLabel('Quantidade de Itens')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Ex: 150 tábuas de carvalho')
-        .setRequired(true);
-
-      const valorInput = new TextInputBuilder()
-        .setCustomId('valor_input')
-        .setLabel('Valor Total')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('Ex: R$ 7.500')
-        .setRequired(true);
-
-      const row1 = new ActionRowBuilder<TextInputBuilder>().addComponents(qtdInput);
-      const row2 = new ActionRowBuilder<TextInputBuilder>().addComponents(valorInput);
-      modal.addComponents(row1, row2);
-
-      await interaction.showModal(modal);
+      return;
     }
+
+    // Botão: Cadastrar Entrega — mostra menu de materiais
+    if (interaction.customId === 'btn_registrar_entrega') {
+      const select = new StringSelectMenuBuilder()
+        .setCustomId('select_material')
+        .setPlaceholder('Selecione o material entregue...')
+        .addOptions(
+          MATERIALS.map(m =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(m.label)
+              .setValue(m.value)
+              .setEmoji(m.emoji)
+          )
+        );
+
+      const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+
+      await interaction.reply({
+        content: '🪵 **Qual material você está entregando?**',
+        components: [row],
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
+  // ─── 3. Select Menu (escolha de material) ────────────────────────────────────
+  if (interaction.isStringSelectMenu() && interaction.customId === 'select_material') {
+    const selectedValue = interaction.values[0];
+    const material = getMaterialByValue(selectedValue);
+    if (!material) {
+      await interaction.reply({ content: '❌ Material inválido selecionado.', ephemeral: true });
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_entrega:${selectedValue}`)
+      .setTitle(`${material.emoji} ${material.label}`);
+
+    const qtdInput = new TextInputBuilder()
+      .setCustomId('qtd_input')
+      .setLabel('Quantidade entregue')
+      .setStyle(TextInputStyle.Short)
+      .setPlaceholder('Ex: 150')
+      .setRequired(true);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(qtdInput));
+    await interaction.showModal(modal);
     return;
   }
 
-  // 3. Modal Submissions
+  // ─── 4. Modais ────────────────────────────────────────────────────────────────
   if (interaction.isModalSubmit()) {
     const member = interaction.member as GuildMember;
     if (!member) return;
 
+    // ── 4a. Solicitação de Emprego ────────────────────────────────────────────
     if (interaction.customId === 'modal_solicitar_emprego') {
-      const nome = interaction.fields.getTextInputValue('nome_input');
+      const nome  = interaction.fields.getTextInputValue('nome_input');
       const pombo = interaction.fields.getTextInputValue('pombo_input');
       const newNickname = `${nome} | ${pombo}`.substring(0, 32);
 
       await interaction.deferReply({ ephemeral: true });
 
-      let nicknameChanged = false;
-      let roleAssigned = false;
-      let errorMsg = '';
+      let errors = '';
 
-      // Tenta alterar o nickname
+      // Alterar nickname
       try {
         await member.setNickname(newNickname);
-        nicknameChanged = true;
       } catch (err: any) {
-        console.warn(`Não foi possível alterar apelido de ${member.user.tag}:`, err.message);
-        errorMsg += '\n❌ Não foi possível alterar o seu apelido (geralmente por restrição de Dono/Admin ou hierarquia).';
+        errors += '\n❌ Não foi possível alterar o apelido (hierarquia de cargos).';
       }
 
-      // Tenta atribuir o cargo
+      // Atribuir cargo
       const roleName = process.env.EMPLOYEE_ROLE_NAME || 'funcionário';
       const role = interaction.guild?.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
-
       if (role) {
-        try {
-          await member.roles.add(role);
-          roleAssigned = true;
-        } catch (err: any) {
-          console.warn(`Não foi possível atribuir cargo a ${member.user.tag}:`, err.message);
-          errorMsg += `\n❌ Não foi possível conceder o cargo **"${roleName}"** (verifique se o cargo do bot está acima na lista de cargos).`;
-        }
+        try { await member.roles.add(role); }
+        catch { errors += `\n❌ Não foi possível conceder o cargo **"${roleName}"**.`; }
       } else {
-        errorMsg += `\n⚠️ Cargo **"${roleName}"** não foi encontrado no servidor.`;
+        errors += `\n⚠️ Cargo **"${roleName}"** não encontrado no servidor.`;
       }
 
-      // Feedback para o usuário
-      if (nicknameChanged && roleAssigned) {
+      // Criar canal privado do funcionário
+      const categoryId = process.env.CATEGORY_ID;
+      const guild = interaction.guild!;
+      const channelName = `🪵-${nome.toLowerCase().replace(/\s+/g, '-')}-${pombo}`.substring(0, 100);
+
+      try {
+        const everyoneRole = guild.roles.everyone;
+
+        const newChannel = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          parent: categoryId || undefined,
+          permissionOverwrites: [
+            // Bloqueia @everyone
+            { id: everyoneRole.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+            // Libera para o funcionário
+            {
+              id: member.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+                PermissionsBitField.Flags.AttachFiles,
+              ],
+            },
+            // Libera para o próprio bot
+            {
+              id: interaction.client.user!.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.SendMessages,
+                PermissionsBitField.Flags.ManageMessages,
+                PermissionsBitField.Flags.ReadMessageHistory,
+              ],
+            },
+          ],
+          reason: `Canal de entregas criado para ${newNickname}`,
+        }) as TextChannel;
+
+        // Manda mensagem de boas-vindas com botão fixo
+        const welcomeEmbed = new EmbedBuilder()
+          .setTitle('🪵 Seu Canal de Entregas')
+          .setDescription(
+            `Olá **${nome}**! Bem-vindo(a) à equipe da Carpintaria!\n\n` +
+            `Este é o seu canal privado de entregas.\n` +
+            `Sempre que concluir uma entrega, clique no botão abaixo para registrá-la.`
+          )
+          .addFields(
+            { name: '📦 Como funciona?', value: '1. Clique em **"Cadastrar Entrega"**\n2. Selecione o material\n3. Informe a quantidade\n4. Envie o print do comprovante', inline: false }
+          )
+          .setColor('#c87d32')
+          .setFooter({ text: 'Carpintaria Management • Canal Privado' });
+
+        const deliveryBtn = new ButtonBuilder()
+          .setCustomId('btn_registrar_entrega')
+          .setLabel('Cadastrar Entrega')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('📥');
+
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(deliveryBtn);
+        const msg = await newChannel.send({ embeds: [welcomeEmbed], components: [row] });
+        await msg.pin().catch(() => {}); // tenta fixar a mensagem
+
         await interaction.editReply({
-          content: `✅ **Solicitação concluída com sucesso!**\nSeu apelido foi definido como \`${newNickname}\` e você recebeu o cargo de **${roleName}**.`
+          content:
+            `✅ **Bem-vindo(a) à Carpintaria, ${nome}!**\n` +
+            `Apelido: \`${newNickname}\` | Cargo: **${roleName}**\n` +
+            `Seu canal de entregas foi criado: ${newChannel}` +
+            (errors ? `\n\n⚠️ Avisos:${errors}` : ''),
         });
-      } else {
+
+      } catch (err: any) {
+        console.error('Erro ao criar canal privado:', err);
         await interaction.editReply({
-          content: `⚠️ **Solicitação processada com avisos:**${errorMsg}\n\n*Por favor, peça a um administrador para ajustar o seu apelido ou cargo manualmente.*`
+          content:
+            `✅ Recrutamento processado, mas houve um erro ao criar o canal privado: ${err.message}` +
+            (errors ? `\n⚠️ Avisos:${errors}` : ''),
         });
       }
-    } 
-    
-    else if (interaction.customId === 'modal_registrar_entrega') {
-      const quantidade = interaction.fields.getTextInputValue('qtd_input');
-      const valor = interaction.fields.getTextInputValue('valor_input');
+      return;
+    }
+
+    // ── 4b. Cadastro de Entrega (após selecionar material) ────────────────────
+    if (interaction.customId.startsWith('modal_entrega:')) {
+      const materialValue = interaction.customId.split(':')[1];
+      const material = getMaterialByValue(materialValue);
+
+      if (!material) {
+        await interaction.reply({ content: '❌ Material inválido.', ephemeral: true });
+        return;
+      }
+
+      const qtdRaw = interaction.fields.getTextInputValue('qtd_input');
+      const quantity = parseInt(qtdRaw.replace(/\D/g, ''), 10);
+
+      if (isNaN(quantity) || quantity <= 0) {
+        await interaction.reply({ content: '❌ Quantidade inválida. Digite apenas números (ex: `150`).', ephemeral: true });
+        return;
+      }
 
       await interaction.deferReply({ ephemeral: true });
 
       const channel = interaction.channel;
       if (!channel || channel.type !== ChannelType.GuildText) {
-        await interaction.editReply({ content: '❌ Este comando só pode ser usado em canais de texto de servidores.' });
+        await interaction.editReply({ content: '❌ Este botão só pode ser usado em canais de texto.' });
         return;
       }
 
-      try {
-        // Criar Thread Privada
-        const threadName = `entrega-${interaction.user.username}`.substring(0, 100);
-        const thread = await channel.threads.create({
-          name: threadName,
-          autoArchiveDuration: 60,
-          type: ChannelType.GuildPrivateThread,
-          reason: `Registro de entrega para ${interaction.user.tag}`
-        });
+      // Salva a entrega pendente associada ao canal do funcionário
+      pending.save(channel.id, interaction.user.id, materialValue, quantity);
 
-        // Adiciona o usuário que solicitou
-        await thread.members.add(interaction.user.id);
+      const unitPrice = material.pricePerUnit;
+      const totalValue = (unitPrice * quantity).toFixed(2);
 
-        // Salvar os dados pendentes no nosso "banco de dados" local JSON
-        db.savePendingDelivery(thread.id, interaction.user.id, quantidade, valor);
+      const promptEmbed = new EmbedBuilder()
+        .setTitle(`📥 Entrega Iniciada — ${material.emoji} ${material.label}`)
+        .setDescription(
+          `Sua entrega foi registrada no sistema!\n\n` +
+          `🔹 **Material:** ${material.emoji} ${material.label}\n` +
+          `🔹 **Quantidade:** ${quantity.toLocaleString('pt-BR')} unidades\n` +
+          `🔹 **Preço por unidade:** R$ ${unitPrice.toFixed(2)}\n` +
+          `💰 **Valor estimado: R$ ${totalValue}**\n\n` +
+          `👉 **Agora envie o print/comprovante aqui no canal para finalizar!**`
+        )
+        .setColor('#c87d32')
+        .setFooter({ text: 'Aguardando comprovante...' });
 
-        // Mensagem de boas-vindas na Thread
-        const welcomeEmbed = new EmbedBuilder()
-          .setTitle('📥 Registro de Entrega Iniciado')
-          .setDescription(
-            `Olá ${interaction.user}, sua entrega foi iniciada no sistema!\n\n` +
-            `🔹 **Quantidade:** ${quantidade}\n` +
-            `🔹 **Valor:** ${valor}\n\n` +
-            `👉 **Ação Requerida:** Por favor, faça o upload do **print/comprovante** da entrega nesta thread para finalizar o registro.`
-          )
-          .setColor('#c87d32')
-          .setFooter({ text: 'Aguardando comprovante...' });
-
-        await thread.send({ content: `${interaction.user}`, embeds: [welcomeEmbed] });
-
-        await interaction.editReply({
-          content: `✅ Formulado recebido! Criei uma thread privada para você concluir o registro: ${thread}`
-        });
-
-      } catch (err: any) {
-        console.error('Erro ao criar thread privada de entrega:', err);
-        await interaction.editReply({
-          content: `❌ Ocorreu um erro ao iniciar a entrega: ${err.message}`
-        });
-      }
+      await channel.send({ content: `${interaction.user}`, embeds: [promptEmbed] });
+      await interaction.editReply({ content: '✅ Formulário enviado! Agora envie o print aqui no canal.' });
+      return;
     }
-    return;
   }
 }
